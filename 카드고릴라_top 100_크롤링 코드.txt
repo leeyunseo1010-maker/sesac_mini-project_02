@@ -1,0 +1,110 @@
+import time
+import pandas as pd
+from selenium import webdriver
+from selenium.webdriver.chrome.service import Service
+from selenium.webdriver.common.by import By
+from webdriver_manager.chrome import ChromeDriverManager
+
+# =================================================
+# [자동화된 날짜 리스트 생성]
+# =================================================
+date_range = pd.date_range(start="2021-01-01", end="2026-02-01", freq="MS")
+target_dates = [date.strftime("%Y-%m-%d") for date in date_range][::-1]
+print(f"총 {len(target_dates)}개월치 데이터를 크롤링합니다.")
+
+# 브라우저 설정
+options = webdriver.ChromeOptions()
+# options.add_argument('headless') 
+driver = webdriver.Chrome(service=Service(ChromeDriverManager().install()), options=options)
+
+all_data = []
+
+try:
+    for date in target_dates:
+        print(f"▶ {date} 랭킹 수집 시작...")
+        
+        url = f"https://www.card-gorilla.com/chart/top100?term=monthly&date={date}"
+        driver.get(url)
+        time.sleep(3)
+        
+        # 스크롤 내리기
+        for i in range(1, 5):
+            driver.execute_script(f"window.scrollTo(0, document.body.scrollHeight * {i/4});")
+            time.sleep(1)
+        
+        # =================================================
+        # [PART 1] 1위 카드 정보 추출
+        # =================================================
+        try:
+            winner_rank = driver.find_element(By.CSS_SELECTOR, "div.winner").text.strip()
+            winner_container = driver.find_element(By.CSS_SELECTOR, "span.card_name")
+            winner_corp = winner_container.find_element(By.CSS_SELECTOR, "p.corp_name").text.strip()
+            
+            winner_name_full = winner_container.text
+            winner_name = winner_name_full.replace(winner_corp, "").strip()
+            
+            if winner_name: # 이름이 있는 경우에만 저장
+                all_data.append({
+                    "기준년월": date,
+                    "순위": winner_rank,
+                    "카드명": winner_name,
+                    "카드사": winner_corp
+                })
+                print(f"   - [1위] {winner_name} 완료")
+            
+        except Exception as e:
+            print(f"   - 1위 데이터 수집 실패: {e}")
+
+        # =================================================
+        # [PART 2] 2위 ~ 100위 (빈 행 필터링 추가)
+        # =================================================
+        try:
+            ranks = driver.find_elements(By.CSS_SELECTOR, "div.num")
+            areas = driver.find_elements(By.CSS_SELECTOR, "div.name_area")
+            
+            count = 0
+            for rank_el, area_el in zip(ranks, areas):
+                r_text = rank_el.text.strip()
+                
+                try:
+                    # 텍스트 추출 시도
+                    n_text = area_el.find_element(By.CSS_SELECTOR, "p.card_name").text.strip()
+                    c_text = area_el.find_element(By.CSS_SELECTOR, "p.corp_name").text.strip()
+                    
+                    # [핵심 수정] 순위와 카드명이 모두 존재할 때만 리스트에 추가
+                    # r_text가 비어있거나(""), 카드명이 없으면 저장하지 않음
+                    if r_text and n_text and r_text != "1":
+                        all_data.append({
+                            "기준년월": date,
+                            "순위": r_text,
+                            "카드명": n_text,
+                            "카드사": c_text
+                        })
+                        count += 1
+                        
+                except Exception:
+                    # p.card_name 등을 찾지 못한 경우(빈 껍데기 태그 등)는 조용히 넘어감
+                    continue
+            
+            print(f"   - [2위~] {count}개 데이터 정상 수집 완료")
+            
+        except Exception as e:
+            print(f"   - 리스트 수집 중 에러: {e}")
+            
+        print("-" * 30)
+
+except Exception as e:
+    print(f"전체 프로세스 에러: {e}")
+
+finally:
+    driver.quit()
+
+# 엑셀 저장
+if all_data:
+    df = pd.DataFrame(all_data)
+    save_path = r"C:\Users\muddy\Downloads\card_gorilla_monthly_top100.xlsx"
+    df.to_excel(save_path, index=False, engine='openpyxl')
+    print(f"\n[완료] 총 {len(df)}개 데이터 저장됨: {save_path}")
+    print(df.head())
+else:
+    print("수집된 데이터가 없습니다.")
